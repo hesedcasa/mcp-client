@@ -20,7 +20,7 @@ $ npm install -g @hesed/mcp-client
 $ mcp-client COMMAND
 running command...
 $ mcp-client (--version)
-@hesed/mcp-client/0.1.0 darwin-arm64 node-v22.14.0
+@hesed/mcp-client/0.1.0 linux-x64 node-v22.22.3
 $ mcp-client --help [COMMAND]
 USAGE
   $ mcp-client COMMAND
