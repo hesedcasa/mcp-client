@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.1.1](https://github.com/hesedcasa/mcp-client/compare/v0.1.0...v0.1.1) (2026-06-03)
+
+
+### 📄 Documentation
+
+* update readme file ([bc1a307](https://github.com/hesedcasa/mcp-client/commit/bc1a3070710d9c1e669daa7e718e46a62c807c2f))
+
+## Changelog
+
 
 All notable changes to this project will be documented in this file.
 
