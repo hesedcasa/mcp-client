@@ -54,6 +54,7 @@
     },
     "topics": {}
   },
+  "repository": "hesedcasa/mcp-client",
   "scripts": {
     "build": "shx rm -rf dist && tsc -b",
     "lint": "eslint",
