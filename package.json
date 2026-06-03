@@ -1,6 +1,6 @@
 {
   "name": "@hesed/mcp-client",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "MCP client plugin — connects to MCP servers and registers tools as native CLI commands",
   "author": "Hesed",
   "bin": {
