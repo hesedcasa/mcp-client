@@ -57,6 +57,108 @@ export function hasStaticAuth(config: McpServerConfig): boolean {
   return Object.keys(config.headers).some((k) => k.toLowerCase() === 'authorization')
 }
 
+// ─── OAuth callback pages ─────────────────────────────────────────────────────
+
+const SUCCESS_HTML = `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Authorization successful</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: #f5f5f5;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      color: #1a1a1a;
+    }
+    .card {
+      background: #fff;
+      border-radius: 12px;
+      box-shadow: 0 4px 24px rgba(0,0,0,.08);
+      padding: 48px 56px;
+      text-align: center;
+      max-width: 420px;
+      width: 100%;
+    }
+    .icon {
+      width: 64px;
+      height: 64px;
+      background: #e8f5e9;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin: 0 auto 24px;
+      font-size: 32px;
+    }
+    h1 { font-size: 22px; font-weight: 600; margin-bottom: 10px; }
+    p  { font-size: 14px; color: #666; line-height: 1.5; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="icon">✓</div>
+    <h1>Authorization successful</h1>
+    <p>You're all set. You can close this tab and return to your terminal.</p>
+  </div>
+</body>
+</html>`
+
+const FAILURE_HTML = `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Authorization failed</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: #f5f5f5;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      color: #1a1a1a;
+    }
+    .card {
+      background: #fff;
+      border-radius: 12px;
+      box-shadow: 0 4px 24px rgba(0,0,0,.08);
+      padding: 48px 56px;
+      text-align: center;
+      max-width: 420px;
+      width: 100%;
+    }
+    .icon {
+      width: 64px;
+      height: 64px;
+      background: #fdecea;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin: 0 auto 24px;
+      font-size: 32px;
+    }
+    h1 { font-size: 22px; font-weight: 600; margin-bottom: 10px; }
+    p  { font-size: 14px; color: #666; line-height: 1.5; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="icon">✕</div>
+    <h1>Authorization failed</h1>
+    <p>Something went wrong! You can close this tab and try again from your terminal.</p>
+  </div>
+</body>
+</html>`
+
 // ─── CliOAuthProvider ─────────────────────────────────────────────────────────
 
 const OAUTH_REDIRECT_PORT = 9876
@@ -168,11 +270,11 @@ export class CliOAuthProvider implements OAuthClientProvider {
 
         if (code) {
           res.writeHead(200, {'Content-Type': 'text/html'})
-          res.end('<h1>Authorized — you can close this tab.</h1>')
+          res.end(SUCCESS_HTML)
           resolve(code)
         } else {
           res.writeHead(400, {'Content-Type': 'text/html'})
-          res.end('<h1>Authorization failed — you can close this tab.</h1>')
+          res.end(FAILURE_HTML)
           reject(new Error('OAuth callback missing code parameter'))
         }
       })

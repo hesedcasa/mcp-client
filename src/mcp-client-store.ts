@@ -156,6 +156,26 @@ async function createTransport(
   return {oauthProvider, transport}
 }
 
+// ─── Error helpers ────────────────────────────────────────────────────────────
+
+function wrapOAuthError(error: unknown): unknown {
+  const msg = error instanceof Error ? error.message : String(error)
+  // The MCP SDK emits this message when it tries to parse a non-JSON HTTP error
+  // response (e.g. plain-text "Forbidden") as an OAuth error response.  This
+  // commonly happens when the server's auth endpoint doesn't allow dynamic
+  // client registration (HTTP 403).  Surface a clear, actionable message
+  // instead of the raw JSON parse noise.
+  if (msg.includes('Invalid OAuth error response')) {
+    const wrapped = new Error(
+      'The server requires OAuth but its authorization server rejected automatic client registration.',
+    )
+    wrapped.cause = error
+    return wrapped
+  }
+
+  return error
+}
+
 // ─── Tool discovery ───────────────────────────────────────────────────────────
 
 export async function discoverTools(config: McpServerConfig, configDir: string): Promise<McpToolSchema[]> {
@@ -185,7 +205,7 @@ export async function discoverTools(config: McpServerConfig, configDir: string):
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         await client.connect(retryTransport as any)
       } else {
-        throw error
+        throw wrapOAuthError(error)
       }
     }
 
@@ -230,7 +250,7 @@ export async function callMcpTool(
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         await client.connect(retryTransport as any)
       } else {
-        throw error
+        throw wrapOAuthError(error)
       }
     }
 

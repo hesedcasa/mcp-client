@@ -52,6 +52,7 @@
     "hooks": {
       "init": "./dist/hooks/init/register-mcp-client-commands"
     },
+    "topicSeparator": " ",
     "topics": {}
   },
   "repository": "hesedcasa/mcp-client",
