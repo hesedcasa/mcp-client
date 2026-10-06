@@ -301,22 +301,31 @@ export async function disposeSharedConfigDir(): Promise<void> {
 }
 
 async function buildSharedConfigDir(): Promise<string> {
-  const dir = await createConfigDir('mcp-client-e2e-shared-')
+  // Credentials first, so a missing one never leaves an empty dir behind.
   const {context7, github} = requireEnv()
+  const dir = await createConfigDir('mcp-client-e2e-shared-')
 
-  // Sequential on purpose: each add writes into the same dir, and the
-  // servers.e2e file covers concurrent behaviour (`refresh` of all) on its own.
-  await runCliOk(addGithubArgs(SERVERS.github, github), dir)
-  await runCliOk(addContext7HttpArgs(SERVERS.context7, context7), dir)
-  await runCliOk(addContext7StdioArgs(SERVERS.context7Stdio, context7), dir)
+  // A failed add rejects the memoized promise, so disposeSharedConfigDir never
+  // learns this path — remove it here, or the servers added before the
+  // failure leave their bearer tokens on disk.
+  try {
+    // Sequential on purpose: each add writes into the same dir, and the
+    // servers.e2e file covers concurrent behaviour (`refresh` of all) on its own.
+    await runCliOk(addGithubArgs(SERVERS.github, github), dir)
+    await runCliOk(addContext7HttpArgs(SERVERS.context7, context7), dir)
+    await runCliOk(addContext7StdioArgs(SERVERS.context7Stdio, context7), dir)
 
-  // Context7 lists its tools without checking the key, so a broken key can be
-  // added through the CLI like any other server; it only fails at call time.
-  await runCliOk(addContext7HttpArgs(SERVERS.context7Broken, 'definitely-not-the-token'), dir)
-  // GitHub checks the token on connect, so its broken twin has to be cloned.
-  await cloneServerWithHeaders(dir, SERVERS.github, SERVERS.githubRevoked, {
-    Authorization: 'Bearer ghp_000000000000000000000000000000000000',
-  })
+    // Context7 lists its tools without checking the key, so a broken key can be
+    // added through the CLI like any other server; it only fails at call time.
+    await runCliOk(addContext7HttpArgs(SERVERS.context7Broken, 'definitely-not-the-token'), dir)
+    // GitHub checks the token on connect, so its broken twin has to be cloned.
+    await cloneServerWithHeaders(dir, SERVERS.github, SERVERS.githubRevoked, {
+      Authorization: 'Bearer ghp_000000000000000000000000000000000000',
+    })
+  } catch (error) {
+    await removeConfigDir(dir)
+    throw error
+  }
 
   return dir
 }

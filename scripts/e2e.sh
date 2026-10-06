@@ -59,8 +59,14 @@ if [ "${#missing[@]}" -gt 0 ]; then
   exit 1
 fi
 
+# Runs on the way out, including after a failing step: `npm pack` can fail
+# after `prepack` has already rewritten README.md, so the restore lives here
+# rather than after the pack.
 cleanup() {
   if [ -n "${SDKCK_HOME:-}" ]; then
+    if [ -f "$SDKCK_HOME/README.md.orig" ]; then
+      cp "$SDKCK_HOME/README.md.orig" README.md
+    fi
     rm -rf "$SDKCK_HOME"
   fi
 }
@@ -120,8 +126,9 @@ if (actual !== want) {
 
 # --no-save never touches package.json; installing from the verified local
 # tarball keeps the mutable registry state out of the loop, and the binary
-# comes from node_modules/.bin.
-npm install --silent --no-save "$SDKCK_TGZ"
+# comes from node_modules/.bin. The install runs with the credentials stripped
+# from the environment: its lifecycle scripts never need them.
+env -u GITHUB_TOKEN -u CONTEXT7_API_KEY npm install --silent --no-save "$SDKCK_TGZ"
 export PATH="$PWD/node_modules/.bin:$PATH"
 
 echo "==> Packing the current build and installing it as an sdkck plugin"
@@ -131,19 +138,23 @@ echo "==> Packing the current build and installing it as an sdkck plugin"
 # the throwaway home keeps the tarball out of the repo root; the EXIT trap
 # removes it with the rest of the home.
 # `oclif readme` stamps the local platform into README.md's usage block, so
-# the committed README is put back afterwards rather than left modified.
+# the committed README is backed up here and put back by the EXIT trap rather
+# than left modified. `prepack` runs repository scripts and needs no
+# credentials, so they are stripped here too.
 cp README.md "$SDKCK_HOME/README.md.orig"
-TGZ="$(npm pack --pack-destination "$SDKCK_HOME" | tail -n 1)"
-cp "$SDKCK_HOME/README.md.orig" README.md
+TGZ="$(env -u GITHUB_TOKEN -u CONTEXT7_API_KEY npm pack --pack-destination "$SDKCK_HOME" | tail -n 1)"
 
 # Installing here — before any `sdkck mcp` invocation — stops sdkck's JIT
 # installer (@hesed/mcp-client is one of its jitPlugins) from pulling the
 # published release over the build under test. The tarball must be passed as
 # a `file:` URL: sdkck resolves any bare path containing a slash as a GitHub
-# org/repo.
-SDKCK_CACHE_DIR="$SDKCK_HOME/cache" \
-SDKCK_CONFIG_DIR="$SDKCK_HOME/config" \
-SDKCK_DATA_DIR="$SDKCK_HOME/data" \
+# org/repo. Credentials are stripped here too: the install handles a local
+# tarball and needs none, so the mocha legs are the only steps that hold them
+# under sdkck.
+env -u GITHUB_TOKEN -u CONTEXT7_API_KEY \
+  SDKCK_CACHE_DIR="$SDKCK_HOME/cache" \
+  SDKCK_CONFIG_DIR="$SDKCK_HOME/config" \
+  SDKCK_DATA_DIR="$SDKCK_HOME/data" \
   sdkck plugins install "file:$SDKCK_HOME/$TGZ"
 
 echo "==> Running end-to-end tests via sdkck"
