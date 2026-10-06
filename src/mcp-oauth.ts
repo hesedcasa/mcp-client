@@ -1,4 +1,3 @@
-/* eslint-disable camelcase */
 import type {OAuthClientProvider} from '@modelcontextprotocol/sdk/client/auth.js'
 import type {StreamableHTTPClientTransport} from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 import type {
@@ -174,12 +173,13 @@ export class CliOAuthProvider implements OAuthClientProvider {
       spawn(cmd, [url], {detached: true, stdio: 'ignore'}).unref()
     }
   }
+
   // Injectable for tests — overrides the 5-minute default
   _timeoutMs = 5 * 60 * 1000
   private _codeVerifier: string | undefined = undefined
   private _completedFlow = false
-  private _configDir: string
-  private _serverName: string
+  private readonly _configDir: string
+  private readonly _serverName: string
   private _transport: StreamableHTTPClientTransport | undefined = undefined
 
   constructor(configDir: string, serverName: string) {
@@ -221,7 +221,7 @@ export class CliOAuthProvider implements OAuthClientProvider {
 
   async redirectToAuthorization(authorizationUrl: URL): Promise<void> {
     process.stderr.write(`Opening browser to authorize sdkck...\n`)
-    this._openBrowser(authorizationUrl.toString())
+    this._openBrowser(authorizationUrl.href)
 
     const code = await this._waitForCallback()
     await this._transport!.finishAuth(code)
@@ -260,7 +260,7 @@ export class CliOAuthProvider implements OAuthClientProvider {
     return state.tokens
   }
 
-  private _waitForCallback(): Promise<string> {
+  private async _waitForCallback(): Promise<string> {
     return new Promise<string>((resolve, reject) => {
       const server = createServer((req, res) => {
         const url = new URL(req.url ?? '/', `http://localhost:${OAUTH_REDIRECT_PORT}`)

@@ -7,6 +7,7 @@ export default class McpClientRefresh extends Command {
   static args = {
     name: Args.string({description: 'Name of the MCP server to refresh (refreshes all if omitted)', required: false}),
   }
+
   static description = 'Refresh the cached tool list for one or all MCP servers'
   static examples = ['<%= config.bin %> mcp client refresh', '<%= config.bin %> mcp client refresh github']
 
@@ -24,7 +25,7 @@ export default class McpClientRefresh extends Command {
       return
     }
 
-    await Promise.all(serverFiles.map((sf) => this.refreshOne(sf.config.name)))
+    await Promise.all(serverFiles.map(async (sf) => this.refreshOne(sf.config.name)))
   }
 
   private async refreshOne(name: string): Promise<void> {
