@@ -9,8 +9,10 @@ permissions: read-all
 on:
   workflow_dispatch:
 
+# Scoped to the ref: a dispatch from another branch skips every job, and in a
+# shared group it would still replace a pending default-branch run.
 concurrency:
-  group: mcp-client-e2e
+  group: mcp-client-e2e-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:

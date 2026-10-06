@@ -68,6 +68,13 @@ SDKCK_E2E_HOME=""
 # Runs on the way out, including after a failing leg. There are no fixtures to
 # sweep: the suite only reads.
 cleanup() {
+  local status=$?
+  # A setup step that aborts under `set -e` after a failed leg would otherwise
+  # replace that leg's status; the first failure is the one to report.
+  if [ "${EXIT_STATUS:-0}" -ne 0 ]; then
+    status=$EXIT_STATUS
+  fi
+
   if [ -n "$SDKCK_E2E_HOME" ]; then
     # `npm pack` can fail after `prepack` has already rewritten README.md, so
     # the restore lives here rather than only after the pack.
@@ -76,6 +83,8 @@ cleanup() {
     fi
     rm -rf "$SDKCK_E2E_HOME"
   fi
+
+  exit "$status"
 }
 trap cleanup EXIT
 
@@ -138,7 +147,8 @@ SDKCK_DIRS=(
 # A fresh home cannot hold the plugin yet; if it does, the leg would test
 # whatever is there rather than this build. `plugins inspect` is a host
 # command, so the probe cannot itself trigger sdkck's first-use install.
-if env "${SDKCK_DIRS[@]}" sdkck plugins inspect @hesed/mcp-client --json >/dev/null 2>&1; then
+if env -u GITHUB_TOKEN -u CONTEXT7_API_KEY \
+  "${SDKCK_DIRS[@]}" sdkck plugins inspect @hesed/mcp-client --json >/dev/null 2>&1; then
   echo "error: @hesed/mcp-client is already installed in the throwaway sdkck home" >&2
   exit 1
 fi
@@ -156,7 +166,9 @@ echo "==> Packing the current build and installing it as an sdkck plugin"
 cp README.md "$SDKCK_E2E_HOME/README.md.orig"
 TGZ="$(env -u GITHUB_TOKEN -u CONTEXT7_API_KEY \
   npm pack --pack-destination "$SDKCK_E2E_HOME" | tail -n 1)"
-cp "$SDKCK_E2E_HOME/README.md.orig" README.md
+# A move, not a copy: once README.md is back, the EXIT trap must have nothing
+# left to restore, or it would overwrite edits made while the sdkck leg runs.
+mv "$SDKCK_E2E_HOME/README.md.orig" README.md
 
 # Installing here — before any `sdkck mcp` invocation — stops sdkck's JIT
 # installer (@hesed/mcp-client is one of its jitPlugins) from pulling the
