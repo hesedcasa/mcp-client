@@ -14,8 +14,6 @@ const config = [
     rules: {
       // Keep existing interfaces; switching to `type` is pure churn.
       '@typescript-eslint/consistent-type-definitions': 'off',
-      // `.catch(() => {})` is used intentionally to swallow close errors.
-      '@typescript-eslint/no-empty-function': 'off',
       // Public store APIs return `null` for "not found".
       '@typescript-eslint/no-restricted-types': 'off',
       // MCP JSON schema uses `required`; renaming booleans isn't worth the churn.
@@ -26,6 +24,13 @@ const config = [
       'unicorn/import-style': ['error', {styles: {path: {named: true}}}],
       // Underscore-prefixed members are injectable test seams; `#private` fields can't be stubbed.
       'unicorn/prefer-private-class-fields': 'off',
+    },
+  },
+  {
+    files: ['test/**/*.ts'],
+    rules: {
+      // Tests stub out methods like `log` with no-op functions.
+      '@typescript-eslint/no-empty-function': 'off',
     },
   },
 ]

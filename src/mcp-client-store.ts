@@ -99,7 +99,7 @@ export async function listServerFiles(configDir: string): Promise<McpClientServe
     return []
   }
 
-  // eslint-disable-next-line require-unicode-regexp -- the 'v' flag needs Node 20+, but engines allows Node 18
+  // eslint-disable-next-line require-unicode-regexp -- the 'v' flag needs an es2024 compile target; tsconfig targets es2022
   const serverFiles = files.filter((f) => /^mcp-client-.+\.json$/.test(f) && !f.endsWith('-oauth.json'))
   const results = await Promise.all(
     serverFiles.map(async (file) => {
@@ -194,7 +194,9 @@ export async function discoverTools(config: McpServerConfig, configDir: string):
       if (error instanceof UnauthorizedError && oauthProvider?.didCompleteFlow()) {
         // Browser auth just completed; tokens are saved — reconnect with a fresh transport
         // because StreamableHTTPClientTransport cannot be started twice.
-        await client.close().catch(() => {})
+        await client.close().catch(() => {
+          // Ignore close errors; the connection is being discarded anyway.
+        })
         const {oauthProvider: retryProvider, transport: retryTransport} = await createTransport(config, configDir)
         if (retryProvider) retryProvider.bindTransport(retryTransport as never)
         client = new Client({name: 'sdkck', version: '1.0.0'})
@@ -207,7 +209,9 @@ export async function discoverTools(config: McpServerConfig, configDir: string):
     const result = await client.listTools()
     return result.tools as unknown as McpToolSchema[]
   } finally {
-    await client.close().catch(() => {})
+    await client.close().catch(() => {
+      // Ignore close errors; the connection is being discarded anyway.
+    })
   }
 }
 
@@ -235,7 +239,9 @@ export async function callMcpTool(
       if (error instanceof UnauthorizedError && oauthProvider?.didCompleteFlow()) {
         // Browser auth just completed; tokens are saved — reconnect with a fresh transport
         // because StreamableHTTPClientTransport cannot be started twice.
-        await client.close().catch(() => {})
+        await client.close().catch(() => {
+          // Ignore close errors; the connection is being discarded anyway.
+        })
         const {oauthProvider: retryProvider, transport: retryTransport} = await createTransport(config, configDir)
         if (retryProvider) retryProvider.bindTransport(retryTransport as never)
         client = new Client({name: 'sdkck', version: '1.0.0'})
@@ -248,6 +254,8 @@ export async function callMcpTool(
     const result = await client.callTool({arguments: args, name: toolName})
     return result as unknown as McpToolResult
   } finally {
-    await client.close().catch(() => {})
+    await client.close().catch(() => {
+      // Ignore close errors; the connection is being discarded anyway.
+    })
   }
 }
