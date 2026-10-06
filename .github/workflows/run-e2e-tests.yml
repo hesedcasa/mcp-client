@@ -9,14 +9,16 @@ permissions: read-all
 on:
   workflow_dispatch:
 
+# Scoped to the ref: a dispatch from another branch skips every job, and in a
+# shared group it would still replace a pending default-branch run.
 concurrency:
-  group: mcp-client-e2e
+  group: mcp-client-e2e-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
   # Everything that installs or builds runs here, with no OIDC permission: a
-  # compromised `npm ci` or sdkck install lifecycle script can neither read the
-  # account credentials nor request a token to fetch them itself.
+  # compromised `npm ci` or `npm install sdkck` lifecycle script can neither
+  # read the account credentials nor request a token to fetch them itself.
   build:
     name: Build the CLI and install the sdkck host
     # The test job needs this one, so it is skipped with it.
@@ -50,7 +52,7 @@ jobs:
       - name: Build the CLI
         run: npm run build
 
-      # For the second leg: the same suite through the pinned sdkck host CLI
+      # For the second leg: the same suite through the latest sdkck host CLI
       # with this build packed and installed as its @hesed/mcp-client plugin —
       # covering the `prepack` artifacts (oclif.manifest.json, README) and
       # plugin dispatch under a host. The plugin is installed before any
@@ -61,46 +63,36 @@ jobs:
       # setup still lets the standalone leg run; the step's own timeout keeps a
       # stalled install from hitting the job timeout, which `continue-on-error`
       # cannot absorb and which would skip the upload.
-      - name: Install the pinned sdkck and the packed plugin
+      - name: Install the latest sdkck and the packed plugin
         id: sdkck
         continue-on-error: true
         timeout-minutes: 5
         run: |
+          npm install --no-save sdkck
           home="$RUNNER_TEMP/sdkck-home"
           mkdir -p "$home"
-          # The host CLI runs the plugin in-process with the live API
-          # credentials in its environment, so it must not be fetched from the
-          # mutable `latest` tag: pin an exact release and verify its sha512
-          # before installing. Bump deliberately, updating the hash with it
-          # (`npm view sdkck@<version> dist.integrity`), and keep the two
-          # values in sync with scripts/e2e.sh.
-          version=0.37.2
-          sha512='sha512-o0FbtDd2x3d5C/pOlREmhJIfCLdwkqXRRI5GtZ7Cd5A5Dvi6PUnOOoB2Ziw6Z7bHNE65bvNkDx3B0Kzn75o1Nw=='
-          tgz="$RUNNER_TEMP/sdkck-$version.tgz"
-          curl -fsSL -o "$tgz" "https://registry.npmjs.org/sdkck/-/sdkck-$version.tgz"
-          # npm reports integrity as `sha512-<base64>`; verify with node
-          # rather than sha512sum for identical behaviour everywhere.
-          node -e '
-          const {createHash} = require("node:crypto")
-          const {readFileSync} = require("node:fs")
-          const want = String(process.argv[2]).replace(/^sha512-/, "")
-          const actual = createHash("sha512").update(readFileSync(process.argv[1])).digest("base64")
-          if (actual !== want) {
-            console.error("sha512 mismatch for " + process.argv[1] + ": got " + actual + ", want " + want)
-            process.exit(1)
-          }
-          ' "$tgz" "$sha512"
-          # --no-save never touches package.json; installing from the verified
-          # local tarball keeps the mutable registry state out of the loop.
-          npm install --no-save "$tgz"
+          export SDKCK_CACHE_DIR="$home/cache" SDKCK_CONFIG_DIR="$home/config" SDKCK_DATA_DIR="$home/data"
+          # A fresh home cannot hold the plugin yet; if it does, the leg would
+          # test whatever is there rather than this build. `plugins inspect` is
+          # a host command, so the probe cannot itself trigger sdkck's
+          # first-use install.
+          if ./node_modules/.bin/sdkck plugins inspect @hesed/mcp-client --json >/dev/null 2>&1; then
+            echo "error: @hesed/mcp-client is already installed in the throwaway sdkck home" >&2
+            exit 1
+          fi
           # A `file:` URL is required: sdkck resolves any bare path containing
           # a slash as a GitHub org/repo. Packing into the throwaway home
           # keeps the tarball out of the workspace.
-          plugin="$(npm pack --pack-destination "$home" | tail -n 1)"
-          SDKCK_CACHE_DIR="$home/cache" \
-          SDKCK_CONFIG_DIR="$home/config" \
-          SDKCK_DATA_DIR="$home/data" \
-            ./node_modules/.bin/sdkck plugins install "file:$home/$plugin"
+          tgz="$(npm pack --pack-destination "$home" | tail -n 1)"
+          ./node_modules/.bin/sdkck plugins install "file:$home/$tgz"
+          # Prove dispatch resolves to the tarball this run packed, not a
+          # published release the auto-installer could have fetched: the
+          # install record sdkck writes under the data dir must carry our
+          # file: URL. The record is read from disk rather than via
+          # `sdkck plugins inspect`, which has been observed to die on an
+          # unsettled top-level await right after loading a freshly
+          # installed plugin.
+          grep -Fq "\"file:$home/$tgz\"" "$SDKCK_DATA_DIR/package.json"
 
       # Only the build outputs travel: the job that holds the credentials
       # checks out the repository itself, so a lifecycle script that edits or
@@ -128,9 +120,10 @@ jobs:
     name: End-to-end tests against GitHub and Context7 MCP servers
     needs: build
     runs-on: ubuntu-latest
-    # Two legs (standalone CLI, then the same suite via sdkck) at roughly
-    # 3 minutes each, with headroom for rate-limit retries.
-    timeout-minutes: 30
+    # Two legs (standalone CLI, then the same suite via sdkck) of up to 20
+    # minutes each, plus up to 10 minutes of setup (checkout, unpack, the
+    # credential fetch), so a slow setup cannot cut the sdkck leg short.
+    timeout-minutes: 50
     # id-token lets the Infisical action exchange GitHub's OIDC token for the
     # account credentials, so no secret is stored in the repo. Only this job
     # has it, and nothing in it installs packages.
@@ -177,12 +170,17 @@ jobs:
           project-slug: ${{ vars.INFISICAL_PROJECT_SLUG }}
           env-slug: dev
 
+      # Step-level timeouts, not just the job's: a hung standalone run fails
+      # only its own step, so the sdkck leg (which runs unless cancelled) still
+      # gets its turn. The job-level timeout stays as the outer backstop.
       - name: Run end-to-end tests
+        timeout-minutes: 20
         run: npm run e2e:mocha
 
       # `npm run` puts node_modules/.bin — where sdkck was installed — on PATH.
       - name: Run end-to-end tests via sdkck
         if: ${{ !cancelled() && needs.build.outputs.sdkck-setup == 'success' }}
+        timeout-minutes: 20
         run: npm run e2e:mocha
         env:
           E2E_HOST_CLI: sdkck

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Runs the end-to-end suite against two live MCP servers (GitHub, Context7) —
-# twice: once through the built standalone CLI, then again through the pinned
+# twice: once through the built standalone CLI, then again through the latest
 # sdkck host CLI with this build packed and installed as its @hesed/mcp-client
 # plugin.
 #
@@ -59,16 +59,32 @@ if [ "${#missing[@]}" -gt 0 ]; then
   exit 1
 fi
 
-# Runs on the way out, including after a failing step: `npm pack` can fail
-# after `prepack` has already rewritten README.md, so the restore lives here
-# rather than after the pack.
+# The throwaway sdkck home this script creates, if it got that far. Deliberately
+# NOT named SDKCK_HOME: an inherited SDKCK_HOME could point at the developer's
+# real sdkck setup, and the EXIT trap must never rm -rf that. This variable only
+# ever holds a path this script itself mktemp'd.
+SDKCK_E2E_HOME=""
+
+# Runs on the way out, including after a failing leg. There are no fixtures to
+# sweep: the suite only reads.
 cleanup() {
-  if [ -n "${SDKCK_HOME:-}" ]; then
-    if [ -f "$SDKCK_HOME/README.md.orig" ]; then
-      cp "$SDKCK_HOME/README.md.orig" README.md
-    fi
-    rm -rf "$SDKCK_HOME"
+  local status=$?
+  # A setup step that aborts under `set -e` after a failed leg would otherwise
+  # replace that leg's status; the first failure is the one to report.
+  if [ "${EXIT_STATUS:-0}" -ne 0 ]; then
+    status=$EXIT_STATUS
   fi
+
+  if [ -n "$SDKCK_E2E_HOME" ]; then
+    # `npm pack` can fail after `prepack` has already rewritten README.md, so
+    # the restore lives here rather than only after the pack.
+    if [ -f "$SDKCK_E2E_HOME/README.md.orig" ]; then
+      cp "$SDKCK_E2E_HOME/README.md.orig" README.md
+    fi
+    rm -rf "$SDKCK_E2E_HOME"
+  fi
+
+  exit "$status"
 }
 trap cleanup EXIT
 
@@ -79,57 +95,63 @@ run_mocha() {
   npm run --silent e2e:mocha -- ${MOCHA_ARGS[@]+"${MOCHA_ARGS[@]}"}
 }
 
+# Records the first failing leg's status. A later leg failing with a different
+# status must not overwrite an earlier failure: the script's contract is to
+# exit with the first failure it saw.
+EXIT_STATUS=0
+record_failure() {
+  local leg_status=$?
+  [ "$EXIT_STATUS" -ne 0 ] || EXIT_STATUS=$leg_status
+}
+
 echo "==> Building the CLI"
 # Not `npm run build`: that is `shx rm -rf dist && tsc -b`, and with the
 # composite tsbuildinfo living at the repo root, `tsc -b` considers a build
 # whose dist/ was just deleted "up to date" and emits nothing — every
 # subprocess then dies with MODULE_NOT_FOUND. --force rebuilds regardless of
 # the buildinfo's view of the world.
+# The build runs repository and dependency scripts that never need the
+# credentials, so they are stripped there as for the sdkck installs.
 rm -rf dist
-npx tsc -b --force
+env -u GITHUB_TOKEN -u CONTEXT7_API_KEY npx tsc -b --force
 
 echo "==> Running end-to-end tests against GitHub and Context7"
-run_mocha
+# Both legs always run: a standalone-leg failure says nothing about the packed
+# plugin, and vice versa. The `|| record_failure` form keeps `set -e` from
+# aborting so the sdkck leg still executes; the first failure becomes the exit
+# code.
+run_mocha || record_failure
 
 # Second leg: the same suite through the sdkck host CLI, with this build
 # installed as its @hesed/mcp-client plugin.
+echo "==> Downloading the latest sdkck"
+# --no-save resolves "latest" from the registry on every run without touching
+# package.json; the binary comes from node_modules/.bin. The install runs with
+# the credentials stripped from the environment: a lifecycle script of the
+# freshly fetched package is arbitrary code from a mutable release, and never
+# needs them.
+env -u GITHUB_TOKEN -u CONTEXT7_API_KEY npm install --silent --no-save sdkck
+export PATH="$PWD/node_modules/.bin:$PATH"
 
 # A throwaway sdkck home keeps the plugin install, its config and its caches
 # out of the developer's real sdkck setup; the test side finds it via
-# E2E_SDKCK_HOME. The pinned tarball below is downloaded into it, so the EXIT
-# trap cleans that up too.
-SDKCK_HOME="$(mktemp -d)"
-export E2E_SDKCK_HOME="$SDKCK_HOME"
+# E2E_SDKCK_HOME.
+SDKCK_E2E_HOME="$(mktemp -d)"
+export E2E_SDKCK_HOME="$SDKCK_E2E_HOME"
+SDKCK_DIRS=(
+  SDKCK_CACHE_DIR="$SDKCK_E2E_HOME/cache"
+  SDKCK_CONFIG_DIR="$SDKCK_E2E_HOME/config"
+  SDKCK_DATA_DIR="$SDKCK_E2E_HOME/data"
+)
 
-echo "==> Downloading the pinned sdkck"
-# The host CLI runs the plugin in-process with the live API credentials in its
-# environment, so it must not be fetched from the mutable `latest` tag: pin an
-# exact release and verify its sha512 before installing. Bump deliberately,
-# updating SDKCK_SHA512 with it (`npm view sdkck@<version> dist.integrity`),
-# and keep the two values in sync with .github/workflows/run-e2e-tests.yml.
-SDKCK_VERSION=0.37.2
-SDKCK_SHA512='sha512-o0FbtDd2x3d5C/pOlREmhJIfCLdwkqXRRI5GtZ7Cd5A5Dvi6PUnOOoB2Ziw6Z7bHNE65bvNkDx3B0Kzn75o1Nw=='
-SDKCK_TGZ="$SDKCK_HOME/sdkck-$SDKCK_VERSION.tgz"
-curl -fsSL -o "$SDKCK_TGZ" "https://registry.npmjs.org/sdkck/-/sdkck-$SDKCK_VERSION.tgz"
-# npm reports integrity as `sha512-<base64>`; verify with node rather than
-# shasum so macOS (dev) and ubuntu (CI) behave identically.
-node -e '
-const {createHash} = require("node:crypto")
-const {readFileSync} = require("node:fs")
-const want = String(process.argv[2]).replace(/^sha512-/, "")
-const actual = createHash("sha512").update(readFileSync(process.argv[1])).digest("base64")
-if (actual !== want) {
-  console.error("sha512 mismatch for " + process.argv[1] + ": got " + actual + ", want " + want)
-  process.exit(1)
-}
-' "$SDKCK_TGZ" "$SDKCK_SHA512"
-
-# --no-save never touches package.json; installing from the verified local
-# tarball keeps the mutable registry state out of the loop, and the binary
-# comes from node_modules/.bin. The install runs with the credentials stripped
-# from the environment: its lifecycle scripts never need them.
-env -u GITHUB_TOKEN -u CONTEXT7_API_KEY npm install --silent --no-save "$SDKCK_TGZ"
-export PATH="$PWD/node_modules/.bin:$PATH"
+# A fresh home cannot hold the plugin yet; if it does, the leg would test
+# whatever is there rather than this build. `plugins inspect` is a host
+# command, so the probe cannot itself trigger sdkck's first-use install.
+if env -u GITHUB_TOKEN -u CONTEXT7_API_KEY \
+  "${SDKCK_DIRS[@]}" sdkck plugins inspect @hesed/mcp-client --json >/dev/null 2>&1; then
+  echo "error: @hesed/mcp-client is already installed in the throwaway sdkck home" >&2
+  exit 1
+fi
 
 echo "==> Packing the current build and installing it as an sdkck plugin"
 # npm pack runs `prepack`, regenerating oclif.manifest.json and the README —
@@ -141,21 +163,34 @@ echo "==> Packing the current build and installing it as an sdkck plugin"
 # the committed README is backed up here and put back by the EXIT trap rather
 # than left modified. `prepack` runs repository scripts and needs no
 # credentials, so they are stripped here too.
-cp README.md "$SDKCK_HOME/README.md.orig"
-TGZ="$(env -u GITHUB_TOKEN -u CONTEXT7_API_KEY npm pack --pack-destination "$SDKCK_HOME" | tail -n 1)"
+cp README.md "$SDKCK_E2E_HOME/README.md.orig"
+TGZ="$(env -u GITHUB_TOKEN -u CONTEXT7_API_KEY \
+  npm pack --pack-destination "$SDKCK_E2E_HOME" | tail -n 1)"
+# A move, not a copy: once README.md is back, the EXIT trap must have nothing
+# left to restore, or it would overwrite edits made while the sdkck leg runs.
+mv "$SDKCK_E2E_HOME/README.md.orig" README.md
 
 # Installing here — before any `sdkck mcp` invocation — stops sdkck's JIT
 # installer (@hesed/mcp-client is one of its jitPlugins) from pulling the
-# published release over the build under test. The tarball must be passed as
-# a `file:` URL: sdkck resolves any bare path containing a slash as a GitHub
-# org/repo. Credentials are stripped here too: the install handles a local
-# tarball and needs none, so the mocha legs are the only steps that hold them
-# under sdkck.
+# published release over the build under test. The tarball must be passed as a `file:` URL:
+# sdkck resolves any bare path containing a slash as a GitHub org/repo.
+# Credentials are stripped here too: the install handles a local tarball and
+# needs none, so the mocha legs are the only steps that hold them under sdkck.
 env -u GITHUB_TOKEN -u CONTEXT7_API_KEY \
-  SDKCK_CACHE_DIR="$SDKCK_HOME/cache" \
-  SDKCK_CONFIG_DIR="$SDKCK_HOME/config" \
-  SDKCK_DATA_DIR="$SDKCK_HOME/data" \
-  sdkck plugins install "file:$SDKCK_HOME/$TGZ"
+  "${SDKCK_DIRS[@]}" sdkck plugins install "file:$SDKCK_E2E_HOME/$TGZ"
+
+# Prove dispatch resolves to the tarball this run packed, not a published
+# release the auto-installer could have fetched: the install record sdkck
+# writes under the data dir must carry our file: URL. The record is read from
+# disk rather than via `sdkck plugins inspect`, which has been observed to die
+# on an unsettled top-level await right after loading a freshly installed
+# plugin.
+grep -Fq "\"file:$SDKCK_E2E_HOME/$TGZ\"" "$SDKCK_E2E_HOME/data/package.json" || {
+  echo "error: sdkck did not register the packed tarball as @hesed/mcp-client" >&2
+  exit 1
+}
 
 echo "==> Running end-to-end tests via sdkck"
-E2E_HOST_CLI=sdkck run_mocha
+E2E_HOST_CLI=sdkck run_mocha || record_failure
+
+exit "$EXIT_STATUS"
