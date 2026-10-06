@@ -1,0 +1,197 @@
+name: Run end-to-end tests
+
+permissions: read-all
+
+# On demand from the default branch only. These tests call the live GitHub
+# and Context7 MCP servers with real credentials, fork PRs cannot get the OIDC
+# token they need for those credentials, and the default-branch gate keeps a
+# manual dispatch of an untrusted ref from running repository code with them.
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: mcp-client-e2e
+  cancel-in-progress: false
+
+jobs:
+  # Everything that installs or builds runs here, with no OIDC permission: a
+  # compromised `npm ci` or sdkck install lifecycle script can neither read the
+  # account credentials nor request a token to fetch them itself.
+  build:
+    name: Build the CLI and install the sdkck host
+    # The test job needs this one, so it is skipped with it.
+    if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    outputs:
+      sdkck-setup: ${{ steps.sdkck.outcome }}
+    steps:
+      - name: Check out repository
+        # Pinned to a full SHA: these actions run before repository code gets
+        # the credentials, so a moved mutable tag could swap what executes.
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          fetch-depth: 2
+          # Nothing here pushes, and the default would leave GITHUB_TOKEN in
+          # the workspace git config for every later step to reuse.
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          cache: npm
+          node-version-file: '.nvmrc'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build the CLI
+        run: npm run build
+
+      # For the second leg: the same suite through the pinned sdkck host CLI
+      # with this build packed and installed as its @hesed/mcp-client plugin —
+      # covering the `prepack` artifacts (oclif.manifest.json, README) and
+      # plugin dispatch under a host. The plugin is installed before any
+      # `sdkck mcp` call so sdkck's JIT installer cannot fetch the published
+      # release over this build. The throwaway sdkck home keeps the install,
+      # config and caches out of the runner's real sdkck setup; the test side
+      # finds it via E2E_SDKCK_HOME. `continue-on-error`, so a broken sdkck
+      # setup still lets the standalone leg run; the step's own timeout keeps a
+      # stalled install from hitting the job timeout, which `continue-on-error`
+      # cannot absorb and which would skip the upload.
+      - name: Install the pinned sdkck and the packed plugin
+        id: sdkck
+        continue-on-error: true
+        timeout-minutes: 5
+        run: |
+          home="$RUNNER_TEMP/sdkck-home"
+          mkdir -p "$home"
+          # The host CLI runs the plugin in-process with the live API
+          # credentials in its environment, so it must not be fetched from the
+          # mutable `latest` tag: pin an exact release and verify its sha512
+          # before installing. Bump deliberately, updating the hash with it
+          # (`npm view sdkck@<version> dist.integrity`), and keep the two
+          # values in sync with scripts/e2e.sh.
+          version=0.37.2
+          sha512='sha512-o0FbtDd2x3d5C/pOlREmhJIfCLdwkqXRRI5GtZ7Cd5A5Dvi6PUnOOoB2Ziw6Z7bHNE65bvNkDx3B0Kzn75o1Nw=='
+          tgz="$RUNNER_TEMP/sdkck-$version.tgz"
+          curl -fsSL -o "$tgz" "https://registry.npmjs.org/sdkck/-/sdkck-$version.tgz"
+          # npm reports integrity as `sha512-<base64>`; verify with node
+          # rather than sha512sum for identical behaviour everywhere.
+          node -e '
+          const {createHash} = require("node:crypto")
+          const {readFileSync} = require("node:fs")
+          const want = String(process.argv[2]).replace(/^sha512-/, "")
+          const actual = createHash("sha512").update(readFileSync(process.argv[1])).digest("base64")
+          if (actual !== want) {
+            console.error("sha512 mismatch for " + process.argv[1] + ": got " + actual + ", want " + want)
+            process.exit(1)
+          }
+          ' "$tgz" "$sha512"
+          # --no-save never touches package.json; installing from the verified
+          # local tarball keeps the mutable registry state out of the loop.
+          npm install --no-save "$tgz"
+          # A `file:` URL is required: sdkck resolves any bare path containing
+          # a slash as a GitHub org/repo. Packing into the throwaway home
+          # keeps the tarball out of the workspace.
+          plugin="$(npm pack --pack-destination "$home" | tail -n 1)"
+          SDKCK_CACHE_DIR="$home/cache" \
+          SDKCK_CONFIG_DIR="$home/config" \
+          SDKCK_DATA_DIR="$home/data" \
+            ./node_modules/.bin/sdkck plugins install "file:$home/$plugin"
+
+      # Only the build outputs travel: the job that holds the credentials
+      # checks out the repository itself, so a lifecycle script that edits or
+      # adds a source, test or script file here cannot get it run there.
+      # node_modules and the sdkck plugin are still installed code — the tests
+      # cannot run without them — so this narrows, not removes, that trust.
+      # A tarball rather than the artifact's own zip, which drops executable
+      # bits and node_modules/.bin symlinks. Absolute paths are kept because
+      # the sdkck install records them, and hosted runners share one layout.
+      - name: Pack the build outputs and sdkck home
+        run: |
+          mkdir -p "$RUNNER_TEMP/sdkck-home"
+          tar -czf "$RUNNER_TEMP/e2e-workspace.tgz" -C / \
+            "${GITHUB_WORKSPACE#/}/node_modules" "${GITHUB_WORKSPACE#/}/dist" \
+            "${RUNNER_TEMP#/}/sdkck-home"
+
+      - name: Upload the workspace
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: e2e-workspace
+          path: ${{ runner.temp }}/e2e-workspace.tgz
+          retention-days: 1
+
+  run-e2e-tests:
+    name: End-to-end tests against GitHub and Context7 MCP servers
+    needs: build
+    runs-on: ubuntu-latest
+    # Two legs (standalone CLI, then the same suite via sdkck) at roughly
+    # 3 minutes each, with headroom for rate-limit retries.
+    timeout-minutes: 30
+    # id-token lets the Infisical action exchange GitHub's OIDC token for the
+    # account credentials, so no secret is stored in the repo. Only this job
+    # has it, and nothing in it installs packages.
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      # A fresh checkout of the dispatched commit, not the build job's copy:
+      # see "Pack the build outputs and sdkck home".
+      - name: Check out repository
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+
+      - name: Download the build outputs
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: e2e-workspace
+          path: ${{ runner.temp }}
+
+      # Extracts only the named members, so nothing else in the archive can
+      # land over the checkout.
+      - name: Unpack the build outputs and sdkck home
+        run: |
+          tar -xzf "$RUNNER_TEMP/e2e-workspace.tgz" -C / \
+            "${GITHUB_WORKSPACE#/}/node_modules" "${GITHUB_WORKSPACE#/}/dist" \
+            "${RUNNER_TEMP#/}/sdkck-home"
+          echo "E2E_SDKCK_HOME=$RUNNER_TEMP/sdkck-home" >> "$GITHUB_ENV"
+
+      - name: Set up Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version-file: '.nvmrc'
+
+      # The Infisical action exports GITHUB_TOKEN (a personal access token —
+      # GitHub's MCP server needs a user identity the workflow token lacks) and
+      # CONTEXT7_API_KEY to $GITHUB_ENV, so every later step sees them; the
+      # steps before it never do.
+      - name: Fetch account credentials from Infisical
+        uses: Infisical/secrets-action@d2e351f16c6ca20d17c85e6c992e04bdeb64e87d # v1.0.18
+        with:
+          method: oidc
+          identity-id: ${{ vars.INFISICAL_IDENTITY_ID }}
+          project-slug: ${{ vars.INFISICAL_PROJECT_SLUG }}
+          env-slug: dev
+
+      - name: Run end-to-end tests
+        run: npm run e2e:mocha
+
+      # `npm run` puts node_modules/.bin — where sdkck was installed — on PATH.
+      - name: Run end-to-end tests via sdkck
+        if: ${{ !cancelled() && needs.build.outputs.sdkck-setup == 'success' }}
+        run: npm run e2e:mocha
+        env:
+          E2E_HOST_CLI: sdkck
+
+      # The build job tolerated a failed sdkck setup so the standalone leg
+      # could still run; fail here so the run doesn't pass without the sdkck
+      # leg.
+      - name: Fail if sdkck setup failed
+        if: ${{ always() && needs.build.outputs.sdkck-setup != 'success' }}
+        run: |
+          echo "::error::sdkck setup failed in the build job; sdkck leg skipped"
+          exit 1
