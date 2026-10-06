@@ -1,4 +1,3 @@
-/* eslint-disable camelcase */
 import {expect} from 'chai'
 import {mkdtemp, rm} from 'node:fs/promises'
 import {tmpdir} from 'node:os'
@@ -13,8 +12,8 @@ function makeAuth(configDir: string, discoverToolsStub: () => Promise<McpToolSch
     bin: 'sdkck',
     configDir,
     runHook: async () => ({failures: [], successes: []}),
-  } as never
-  const cmd = new McpClientAuth(['my-server'], config)
+  }
+  const cmd = new McpClientAuth(['my-server'], config as never)
   cmd.log = () => {}
   cmd._discoverTools = discoverToolsStub
   return cmd

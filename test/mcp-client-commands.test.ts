@@ -1,6 +1,6 @@
 import type {Config} from '@oclif/core/interfaces'
 
-import {Command} from '@oclif/core'
+import {type Command} from '@oclif/core'
 import {expect} from 'chai'
 import {mkdtemp, rm} from 'node:fs/promises'
 import {tmpdir} from 'node:os'
@@ -68,19 +68,19 @@ async function makeCmd(
   const entry = ic._commands.get('test-server:getPet')
   if (!entry) throw new Error('Command "test-server:getPet" not registered')
   const CmdClass = await entry.load()
-  const cmdConfig = {bin: 'sdkck', configDir, runHook: async () => ({failures: [], successes: []})} as never
+  const cmdConfig = {bin: 'sdkck', configDir, runHook: async () => ({failures: [], successes: []})}
 
   const lines: string[] = []
   const warnLines: string[] = []
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const cmd = new (CmdClass as any)(argv, cmdConfig) as DynamicMcpCmd
+  const DynamicCmd = CmdClass as unknown as new (argv: string[], config: never) => DynamicMcpCmd
+  const cmd = new DynamicCmd(argv, cmdConfig as never)
   cmd.log = (message = '') => {
-    lines.push(String(message))
+    lines.push(message)
   }
 
   cmd.warn = (message: Error | string) => {
     warnLines.push(String(message))
-    return message as string
+    return message
   }
 
   return {cmd, output: () => lines.join('\n'), warnings: () => warnLines}

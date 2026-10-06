@@ -33,12 +33,12 @@ export default class McpClientList extends Command {
           ? `${config.command}${config.args && config.args.length > 0 ? ' ' + config.args.join(' ') : ''}`
           : config.url
 
-      this.log(`${config.name}`)
+      this.log(config.name)
       this.log(`  Transport: ${config.transport} (${transportDesc})`)
       this.log(`  Tools: ${toolCount}${stale ? " (cache stale — run 'mcp client refresh')" : ''}`)
       this.log(`  Cached at: ${cachedAt}`)
 
-      if (flags.tools && cachedTools && cachedTools.length > 0) {
+      if (flags.tools && cachedTools?.length) {
         for (const tool of cachedTools) {
           this.log(`    ${config.name} ${tool.name}${tool.description ? ` — ${tool.description}` : ''}`)
         }

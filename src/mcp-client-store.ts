@@ -2,6 +2,8 @@ import {existsSync} from 'node:fs'
 import {mkdir, readdir, readFile, unlink, writeFile} from 'node:fs/promises'
 import {join} from 'node:path'
 
+import type {CliOAuthProvider} from './mcp-oauth.js'
+
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 export interface McpServerConfig {
@@ -97,6 +99,7 @@ export async function listServerFiles(configDir: string): Promise<McpClientServe
     return []
   }
 
+  // eslint-disable-next-line require-unicode-regexp -- the 'v' flag needs an es2024 compile target; tsconfig targets es2022
   const serverFiles = files.filter((f) => /^mcp-client-.+\.json$/.test(f) && !f.endsWith('-oauth.json'))
   const results = await Promise.all(
     serverFiles.map(async (file) => {
@@ -123,16 +126,15 @@ export function isToolCacheStale(data: McpClientServerFile): boolean {
 async function createTransport(
   config: McpServerConfig,
   configDir: string,
-): Promise<{oauthProvider: import('./mcp-oauth.js').CliOAuthProvider | undefined; transport: unknown}> {
+): Promise<{oauthProvider: CliOAuthProvider | undefined; transport: unknown}> {
   if (config.transport === 'stdio') {
-    // eslint-disable-next-line import/no-unresolved
     const {StdioClientTransport} = await import('@modelcontextprotocol/sdk/client/stdio.js')
     return {
       oauthProvider: undefined,
       transport: new StdioClientTransport({
         args: config.args ?? [],
         command: config.command!,
-        env: config.env ? ({...process.env, ...config.env} as Record<string, string>) : undefined,
+        env: config.env ? {...(process.env as Record<string, string>), ...config.env} : undefined,
         stderr: 'pipe',
       }),
     }
@@ -141,7 +143,6 @@ async function createTransport(
   const {CliOAuthProvider, hasStaticAuth} = await import('./mcp-oauth.js')
   const oauthProvider = hasStaticAuth(config) ? undefined : new CliOAuthProvider(configDir, config.name)
 
-  // eslint-disable-next-line import/no-unresolved
   const {StreamableHTTPClientTransport} = await import('@modelcontextprotocol/sdk/client/streamableHttp.js')
   const transport = new StreamableHTTPClientTransport(new URL(config.url!), {
     authProvider: oauthProvider,
@@ -166,11 +167,9 @@ function wrapOAuthError(error: unknown): unknown {
   // client registration (HTTP 403).  Surface a clear, actionable message
   // instead of the raw JSON parse noise.
   if (msg.includes('Invalid OAuth error response')) {
-    const wrapped = new Error(
-      'The server requires OAuth but its authorization server rejected automatic client registration.',
-    )
-    wrapped.cause = error
-    return wrapped
+    return new Error('The server requires OAuth but its authorization server rejected automatic client registration.', {
+      cause: error,
+    })
   }
 
   return error
@@ -179,9 +178,7 @@ function wrapOAuthError(error: unknown): unknown {
 // ─── Tool discovery ───────────────────────────────────────────────────────────
 
 export async function discoverTools(config: McpServerConfig, configDir: string): Promise<McpToolSchema[]> {
-  // eslint-disable-next-line import/no-unresolved
   const {Client} = await import('@modelcontextprotocol/sdk/client/index.js')
-  // eslint-disable-next-line import/no-unresolved
   const {UnauthorizedError} = await import('@modelcontextprotocol/sdk/client/auth.js')
   const {oauthProvider, transport} = await createTransport(config, configDir)
 
@@ -192,18 +189,18 @@ export async function discoverTools(config: McpServerConfig, configDir: string):
   let client = new Client({name: 'sdkck', version: '1.0.0'})
   try {
     try {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      await client.connect(transport as any)
+      await client.connect(transport as never)
     } catch (error) {
       if (error instanceof UnauthorizedError && oauthProvider?.didCompleteFlow()) {
         // Browser auth just completed; tokens are saved — reconnect with a fresh transport
         // because StreamableHTTPClientTransport cannot be started twice.
-        await client.close().catch(() => {})
+        await client.close().catch(() => {
+          // Ignore close errors; the connection is being discarded anyway.
+        })
         const {oauthProvider: retryProvider, transport: retryTransport} = await createTransport(config, configDir)
         if (retryProvider) retryProvider.bindTransport(retryTransport as never)
         client = new Client({name: 'sdkck', version: '1.0.0'})
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        await client.connect(retryTransport as any)
+        await client.connect(retryTransport as never)
       } else {
         throw wrapOAuthError(error)
       }
@@ -212,7 +209,9 @@ export async function discoverTools(config: McpServerConfig, configDir: string):
     const result = await client.listTools()
     return result.tools as unknown as McpToolSchema[]
   } finally {
-    await client.close().catch(() => {})
+    await client.close().catch(() => {
+      // Ignore close errors; the connection is being discarded anyway.
+    })
   }
 }
 
@@ -224,9 +223,7 @@ export async function callMcpTool(
   args: Record<string, unknown>,
   configDir: string,
 ): Promise<McpToolResult> {
-  // eslint-disable-next-line import/no-unresolved
   const {Client} = await import('@modelcontextprotocol/sdk/client/index.js')
-  // eslint-disable-next-line import/no-unresolved
   const {UnauthorizedError} = await import('@modelcontextprotocol/sdk/client/auth.js')
   const {oauthProvider, transport} = await createTransport(config, configDir)
 
@@ -237,18 +234,18 @@ export async function callMcpTool(
   let client = new Client({name: 'sdkck', version: '1.0.0'})
   try {
     try {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      await client.connect(transport as any)
+      await client.connect(transport as never)
     } catch (error) {
       if (error instanceof UnauthorizedError && oauthProvider?.didCompleteFlow()) {
         // Browser auth just completed; tokens are saved — reconnect with a fresh transport
         // because StreamableHTTPClientTransport cannot be started twice.
-        await client.close().catch(() => {})
+        await client.close().catch(() => {
+          // Ignore close errors; the connection is being discarded anyway.
+        })
         const {oauthProvider: retryProvider, transport: retryTransport} = await createTransport(config, configDir)
         if (retryProvider) retryProvider.bindTransport(retryTransport as never)
         client = new Client({name: 'sdkck', version: '1.0.0'})
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        await client.connect(retryTransport as any)
+        await client.connect(retryTransport as never)
       } else {
         throw wrapOAuthError(error)
       }
@@ -257,6 +254,8 @@ export async function callMcpTool(
     const result = await client.callTool({arguments: args, name: toolName})
     return result as unknown as McpToolResult
   } finally {
-    await client.close().catch(() => {})
+    await client.close().catch(() => {
+      // Ignore close errors; the connection is being discarded anyway.
+    })
   }
 }

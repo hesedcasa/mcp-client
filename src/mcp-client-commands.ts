@@ -81,7 +81,7 @@ function buildToolArgsFromFlags(
 
 function createMcpToolCommand(serverName: string, tool: McpToolSchema): typeof Command {
   const properties = tool.inputSchema.properties ?? {}
-  const requiredSet = new Set(tool.inputSchema.required ?? [])
+  const requiredSet = new Set(tool.inputSchema.required)
 
   // All properties become flags (no positional args).
   // Positional args break command ID resolution when commands are registered dynamically
@@ -125,7 +125,7 @@ function createMcpToolCommand(serverName: string, tool: McpToolSchema): typeof C
     _callTool: typeof callMcpTool = callMcpTool
 
     async run(): Promise<void> {
-      const {flags: f} = await this.parse(DynamicMcpToolCommand as unknown as typeof Command)
+      const {flags: f} = await this.parse(DynamicMcpToolCommand)
 
       const serverFile = await readServerFile(this.config.configDir, capturedServerName)
       if (!serverFile) {
@@ -145,7 +145,7 @@ function createMcpToolCommand(serverName: string, tool: McpToolSchema): typeof C
               requiredSet: capturedRequiredSet,
             },
             {},
-            f as Record<string, unknown>,
+            f,
           )
         } catch (error) {
           this.error((error as Error).message)
@@ -242,24 +242,24 @@ export async function registerMcpClientCommands(config: Config): Promise<void> {
 
     for (const tool of cachedTools) {
       const commandId = `${serverName}:${tool.name}`
-      if (internal._commands.has(commandId)) continue
+      if (!internal._commands.has(commandId)) {
+        const CmdClass = createMcpToolCommand(serverName, tool)
 
-      const CmdClass = createMcpToolCommand(serverName, tool)
-
-      internal._commands.set(commandId, {
-        aliases: [],
-        args: {},
-        description: tool.description ?? tool.name,
-        flags: CmdClass.flags as Record<string, unknown>,
-        hidden: false,
-        id: commandId,
-        async load() {
-          return CmdClass
-        },
-        pluginName: config.name,
-        pluginType: 'core',
-        strict: true,
-      })
+        internal._commands.set(commandId, {
+          aliases: [],
+          args: {},
+          description: tool.description ?? tool.name,
+          flags: CmdClass.flags,
+          hidden: false,
+          id: commandId,
+          async load() {
+            return CmdClass
+          },
+          pluginName: config.name,
+          pluginType: 'core',
+          strict: true,
+        })
+      }
     }
   }
 }

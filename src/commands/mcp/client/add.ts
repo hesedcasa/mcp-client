@@ -7,6 +7,7 @@ export default class McpClientAdd extends Command {
   static args = {
     name: Args.string({description: 'Name for the MCP server', required: true}),
   }
+
   static description = 'Add an MCP server and register its tools as native CLI commands'
   static examples = [
     '<%= config.bin %> mcp client add github --command npx --args @modelcontextprotocol/server-github',
@@ -14,6 +15,7 @@ export default class McpClientAdd extends Command {
     '<%= config.bin %> mcp client add remote --url http://localhost:3000/mcp',
     '<%= config.bin %> mcp client add remote --url https://api.example.com/mcp --header Authorization="Bearer token"',
   ]
+
   static flags = {
     args: Flags.string({
       description: 'Argument to pass to the server command (repeatable)',

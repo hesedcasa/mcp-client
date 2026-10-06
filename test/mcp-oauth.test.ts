@@ -1,4 +1,3 @@
-/* eslint-disable camelcase */
 import {expect, use} from 'chai'
 import chaiAsPromised from 'chai-as-promised'
 import {mkdtemp, rm} from 'node:fs/promises'
@@ -6,11 +5,11 @@ import {request} from 'node:http'
 import {tmpdir} from 'node:os'
 import {join} from 'node:path'
 
-use(chaiAsPromised)
-
 import type {McpServerConfig} from '../src/mcp-client-store.js'
 
 import {CliOAuthProvider, deleteOAuthState, hasStaticAuth, readOAuthState, writeOAuthState} from '../src/mcp-oauth.js'
+
+use(chaiAsPromised)
 
 describe('mcp-oauth', () => {
   describe('oauth state file helpers', () => {

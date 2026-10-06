@@ -8,6 +8,7 @@ export default class McpClientAuth extends Command {
   static args = {
     name: Args.string({description: 'Name of the MCP server to re-authenticate', required: true}),
   }
+
   static description = 'Re-authenticate an HTTP MCP server via OAuth browser flow'
   static examples = ['<%= config.bin %> mcp client auth browserstack-remote']
   // Injectable for tests
